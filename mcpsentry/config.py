@@ -76,11 +76,13 @@ def load(path):
         if "sandbox" in spec and any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) or any(c in v for c in ("\n", "\r", "\x00")) for k, v in env.items()):
             raise ValueError("Sandbox environment requires valid names and single-line values")
     policy = data.setdefault("policy", {})
-    keys(policy, {"default", "allow", "deny", "sensitive_sources", "sensitive_destinations", "recipient_allowlists", "argument_constraints", "call_limits", "dlp", "redaction", "cross_call", "require_sandbox", "approvals", "block_secrets", "block_tool_changes", "block_poisoning"}, "policy")
+    keys(policy, {"default", "allow", "deny", "sensitive_sources", "sensitive_destinations", "recipient_allowlists", "argument_constraints", "call_limits", "dlp", "redaction", "cross_call", "require_sandbox", "approvals", "block_secrets", "block_tool_changes", "block_poisoning", "destinations", "responses"}, "policy")
     if not isinstance(policy.get("require_sandbox", False), bool):
         raise ValueError("require_sandbox must be boolean")
     if policy.get("require_sandbox") and any("url" not in s and "sandbox" not in s for s in servers.values()):
         raise ValueError("Every local server must configure a sandbox when require_sandbox is true")
+    from .protections import validate
+    validate(policy)
     validate_dlp(policy.get("dlp", {}))
     validate_approvals(policy.get("approvals", {}))
     validate_redaction(policy.get("redaction", {}))
@@ -108,6 +110,10 @@ def load(path):
     for rule in policy.get("redaction", {}).get("rules", []):
         if any(pointer[1:].split("/")[0].replace("~1", "/").replace("~0", "~") in protected_recipients for pointer in rule["paths"]):
             raise ValueError("Redaction cannot change configured recipient fields")
+    destination_paths = {r["path"] for r in policy.get("destinations", {}).get("rules", [])}
+    for rule in policy.get("redaction", {}).get("rules", []):
+        if any(a == b or a.startswith(b + "/") or b.startswith(a + "/") for a in rule["paths"] for b in destination_paths):
+            raise ValueError("Redaction cannot change destination fields")
     constraints = policy.get("argument_constraints", {})
     if not isinstance(constraints, dict):
         raise ValueError("argument_constraints must be an object")

@@ -22,6 +22,7 @@ class Gateway:
         self.approved = None
         self.baseline = baseline
         self.routes = {}
+        self.catalog_components = {}
         self.approvals = Approvals(audit.path.parent) if config["policy"].get("approvals", {}).get("enabled", False) else None
 
     async def start(self):
@@ -45,7 +46,8 @@ class Gateway:
             raise
 
     async def discover(self):
-        tools, routes = [], {}
+        from .catalog import components
+        tools, routes, hashes = [], {}, {}
         for name, backend in self.backends.items():
             for tool in await backend.tools():
                 if not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", tool["name"]):
@@ -56,6 +58,7 @@ class Gateway:
                 if alias in routes:
                     raise BackendError("duplicate_tool_name")
                 routes[alias] = (backend, tool["name"])
+                hashes[alias] = components(tool)
                 # Drop extensions/annotations: upstream claims are not trusted.
                 public = {k: tool[k] for k in ("description", "inputSchema", "outputSchema", "title") if k in tool}
                 public["name"] = alias
@@ -63,6 +66,7 @@ class Gateway:
         if len(encode(tools).encode()) > LIMIT // 2:
             raise BackendError("aggregate_catalog_too_large")
         self.routes = routes
+        self.catalog_components = hashes
         if self.guard.window is not None:
             self.guard.window.destinations = {alias: backend.name for alias, (backend, _) in routes.items()}
         return tools
@@ -70,14 +74,25 @@ class Gateway:
     def snapshot(self, tools):
         # Bind approvals to configured command, arguments, cwd and environment,
         # without storing any of those possibly sensitive values in the file.
-        return {"version": 1, "configuration": fingerprint(self.config), "tools": {t["name"]: fingerprint(t) for t in tools}}
+        return {"version": 2, "configuration": fingerprint(self.config), "tools": {t["name"]: fingerprint(t) for t in tools}, "components": self.catalog_components}
 
     def changed(self, tool, tools):
         current = self.snapshot(tools)
-        return (self.approved.get("configuration") != current["configuration"] or self.approved.get("tools", {}).get(tool) != current["tools"].get(tool))
+        return (self.approved.get("configuration") != current["configuration"] or self.approved.get("tools", {}).get(tool) != current["tools"].get(tool) or bool(self.approved.get("components", {}).get(tool)) and self.approved["components"][tool] != current["components"].get(tool))
+
+    def catalog_findings(self, tools):
+        from .catalog import differences
+        changes = differences(self.approved, self.snapshot(tools))
+        for change in changes:
+            reason = change["reason"]
+            if change["fields"]:
+                reason += ":" + ",".join(change["fields"])
+            self.audit.record("catalog_change", change["tool"], "alert", reason)
+        return changes
 
     async def list_tools(self):
         tools = await self.discover()
+        self.catalog_findings(tools)
         visible = []
         for tool in tools:
             p = self.config["policy"]
@@ -99,6 +114,7 @@ class Gateway:
         # Always refresh immediately before dispatch. This cannot prevent a
         # dishonest server from lying about behavior or changing after the check.
         tools = await self.discover()
+        self.catalog_findings(tools)
         tool = next((t for t in tools if t["name"] == name), None)
         if tool is None:
             self.audit.record("call_blocked", "", "block", "unknown_tool")
@@ -152,11 +168,18 @@ class Gateway:
             public = {k: result[k] for k in ("structuredContent", "isError") if k in result}
             public["content"] = [{"type": "text", "text": block["text"]} for block in result["content"]]
             self.guard.observe(name, public)
-            response_poison = p.get("block_poisoning", True) and poisoned(public)
-            decision = "block" if response_poison and self.mode == "enforce" else "would_block" if response_poison else "error" if public.get("isError") else "allow"
-            self.audit.record("call_finished", name, decision, "response_poisoning" if response_poison else "tool_error" if public.get("isError") else "completed", int((time.monotonic() - started) * 1000))
+            from .protections import inspect_response
+            public, response_reasons, response_redacted = inspect_response(name, public, p, self.mode == "enforce")
+            if response_reasons:
+                self.audit.record("response_finding", name, "block" if self.mode == "enforce" else "would_block", response_reasons[0])
+            if response_redacted:
+                self.audit.record("response_redacted", name, "allow", "sensitive_fields_removed")
+                public.setdefault("_meta", {})["mcpsentry_response"] = {"redacted": True, "fields_changed": response_redacted}
+                public["content"].append({"type": "text", "text": "MCP-Sentry redacted sensitive data from this tool response."})
+            decision = "block" if response_reasons and self.mode == "enforce" else "would_block" if response_reasons else "error" if public.get("isError") else "allow"
+            self.audit.record("call_finished", name, decision, response_reasons[0] if response_reasons else "tool_error" if public.get("isError") else "completed", int((time.monotonic() - started) * 1000))
             if decision == "block":
-                return self.blocked("response_poisoning")
+                return self.blocked(response_reasons[0])
             if redacted:
                 public["_meta"] = {"mcpsentry": {"redacted": True, "fields_changed": redacted}}
                 public["content"].append({"type": "text", "text": f"MCP-Sentry removed sensitive data from {redacted} configured field(s) before forwarding this call."})
@@ -259,6 +282,16 @@ def read_baseline(path):
     if path.stat().st_size > LIMIT:
         raise ValueError("Baseline too large")
     data = json.loads(path.read_text())
-    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("configuration"), str) or not isinstance(data.get("tools"), dict):
+    if not isinstance(data, dict) or data.get("version") not in (1, 2) or not isinstance(data.get("configuration"), str) or not isinstance(data.get("tools"), dict):
         raise ValueError("Invalid baseline")
+    if any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for k, v in data["tools"].items()):
+        raise ValueError("Invalid baseline tool hashes")
+    if data["version"] == 2:
+        from .catalog import FIELDS
+        parts = data.get("components")
+        if not isinstance(parts, dict) or set(parts) != set(data["tools"]):
+            raise ValueError("Invalid baseline components")
+        for fields in parts.values():
+            if not isinstance(fields, dict) or set(fields) != set(FIELDS) or any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in fields.values()):
+                raise ValueError("Invalid baseline component hashes")
     return data

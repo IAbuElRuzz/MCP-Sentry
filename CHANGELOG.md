@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- Hash-only tool metadata component baselines and field-level change reports, including annotations.
+- Exact domain destination rules with internal/external lists, unknown blocking and optional external approval.
+- Independent response DLP, explicit response redaction and expanded injection patterns.
+- Offline synthetic policy scenarios with session history, virtual time and expected decisions.
+- Runnable example policy/scenarios and CI checks.
+
+
 ## 0.5.0
 
 - Add opt-in sensitive string-field redaction with safe-text preservation, whole-field removal for secrets/encodings, full policy rechecks and visible rewrite notices.

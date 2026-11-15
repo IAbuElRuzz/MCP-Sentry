@@ -14,6 +14,8 @@ from .redaction import candidate as redact_candidate
 POISON = [
     re.compile(r"(?:do not|don't|never)\s+(?:tell|inform|mention|disclose).{0,60}(?:user|human)", re.I | re.S),
     re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions", re.I),
+    re.compile(r"(?:reveal|print|expose)\s+(?:the\s+)?(?:system|developer)\s+(?:prompt|instructions)", re.I),
+    re.compile(r"(?:<\|(?:system|developer)\|>|\[INST\]|<system>)", re.I),
     re.compile(r"replaces?\s+.{0,60}(?:other|every).{0,30}tools?", re.I | re.S),
 ]
 
@@ -158,6 +160,10 @@ class Guard:
                     recipient_fields.extend("/" + field.replace("~", "~0").replace("/", "~1") + "/" + str(index) for index in range(len(value)))
                 else:
                     recipient_fields.append("/" + field.replace("~", "~0").replace("/", "~1"))
+        from .protections import destination_reasons
+        destination_findings, destination_paths = destination_reasons(name, args, p.get("destinations", {}))
+        reasons.extend(destination_findings)
+        recipient_fields.extend(destination_paths)
         outgoing = list(texts(args, include_keys=True))
         self.recipient_fields = tuple(recipient_fields)
         trusted = matches(name, p.get("sensitive_destinations", []))

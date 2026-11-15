@@ -145,7 +145,9 @@ async def inspect(args, audit, config, baseline):
                 findings.append({"tool": name, "reason": "tool_removed", "severity": "high"})
             if gateway.baseline["configuration"] != gateway.snapshot(tools)["configuration"] and not tools:
                 findings.append({"tool": "", "reason": "configuration_changed", "severity": "high"})
-        print(json.dumps({"status": "findings" if findings else "no_known_patterns_matched", "tool_count": len(tools), "findings": findings, "coverage": "Advertised tool metadata only; does not establish server safety."}, indent=2, ensure_ascii=True))
+        from .catalog import differences
+        catalog_changes = differences(gateway.approved, gateway.snapshot(tools))
+        print(json.dumps({"catalog_changes": catalog_changes, "status": "findings" if findings else "no_known_patterns_matched", "tool_count": len(tools), "findings": findings, "coverage": "Advertised tool metadata only; does not establish server safety."}, indent=2, ensure_ascii=True))
         return 2 if findings else 0
     finally:
         await gateway.close()
@@ -188,6 +190,9 @@ def parser():
     sub.add_argument("--input", default="-", help="JSON argument file, or - for stdin")
     sub.add_argument("--tool", default="outbound__check", help="Tool alias for scoped DLP allow rules")
     sub.add_argument("--config", help="Optional policy configuration; no servers are started or contacted")
+    sub = commands.add_parser("policy-test", help="Evaluate synthetic scenarios offline; never runs MCP servers")
+    sub.add_argument("--config", required=True)
+    sub.add_argument("--input", required=True)
     sub = commands.add_parser("redact", help="Create a private sanitized request file; no MCP tool is executed")
     sub.add_argument("--config", required=True)
     sub.add_argument("--input", required=True, help="Request JSON containing name and arguments")
@@ -210,6 +215,17 @@ def main():
     args = parser().parse_args()
     audit = None
     try:
+        if args.command == "policy-test":
+            from .simulation import simulate
+            config = load(args.config)
+            with open(args.input, "rb") as stream:
+                raw = stream.read(MAX_BYTES + 1)
+            if len(raw) > MAX_BYTES:
+                raise ValueError("Scenario exceeds size limit")
+            scenario = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Non-finite JSON")))
+            report = simulate(config["policy"], scenario)
+            print(json.dumps(report, indent=2, ensure_ascii=True))
+            raise SystemExit(0 if report["passed"] else 2)
         if args.command == "redact":
             config = load(args.config)
             if not config["policy"].get("redaction", {}).get("enabled", False):

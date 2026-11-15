@@ -2,9 +2,11 @@
 
 A local security gateway for MCP tool traffic. See what your AI calls, apply policies before forwarding requests, and keep a metadata-only audit trail.
 
-**v0.5.0 · Experimental · Python 3.11+ · macOS / Linux · Standard-library core, optional PDF/SDK extras.** Inspect outbound MCP arguments, redact eligible sensitive content, and detect fragments spread across calls. Local stdio and remote Streamable HTTP upstreams share one client-facing stdio gateway.
+**v0.6.0 · Experimental · Python 3.11+ · macOS / Linux · Standard-library core, optional PDF/SDK extras.** Inspect outbound MCP arguments, redact eligible sensitive content, and detect fragments spread across calls. Local stdio and remote Streamable HTTP upstreams share one client-facing stdio gateway.
 
-Try the new features with `python3 -m mcpsentry demo --features`. They need no container installation. See [redaction and cross-call detection](docs/DATA_PROTECTION.md) for configuration, approval interaction and coverage limits.
+See [advanced protection](docs/ADVANCED_PROTECTION.md) for tool-change reports, destination rules, response inspection and offline policy tests.
+
+Try redaction and cross-call detection with `python3 -m mcpsentry demo --features`. They need no container installation. See [redaction and cross-call detection](docs/DATA_PROTECTION.md) for configuration, approval interaction and coverage limits.
 
 See [runtime controls and verification](docs/CONTROLS.md) for setup, exact boundaries and checks that could not run in this environment.
 
@@ -310,3 +312,13 @@ Next milestones: complete the blocked integration checks, evaluate model quality
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Advanced protection (0.6)
+
+Tool baselines now report changes to descriptions, schemas and annotations. Destination rules distinguish approved internal/external domains and can require approval for external sends. Independent response DLP can redact configured fields or withhold unsafe results. Test policies offline with synthetic scenarios:
+
+```sh
+python -m mcpsentry policy-test --config examples/protection-policy.json --input examples/policy-scenarios.json
+```
+
+See [Advanced protection](docs/ADVANCED_PROTECTION.md) for configuration and limits.

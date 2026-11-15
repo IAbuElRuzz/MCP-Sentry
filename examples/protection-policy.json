@@ -1,0 +1,12 @@
+{
+  "servers": {"mail": {"command": "python3", "args": ["-m", "mcpsentry.demo_server", "mail"], "cwd": ".."}},
+  "policy": {
+    "default": "deny",
+    "allow": ["mail__send"],
+    "destinations": {"rules": [{"tool": "mail__send", "path": "/to", "kind": "email", "internal_domains": ["company.test"], "external_domains": ["partner.test"], "unknown": "block"}]},
+    "responses": {
+      "enabled": true,
+      "redaction": {"enabled": true, "rules": [{"tool": "mail__send", "paths": ["/content/0/text"], "categories": ["email"]}]}
+    }
+  }
+}
