@@ -7,3 +7,6 @@ dist/
 .mcpsentry/
 artifacts/
 mcpsentry.json
+
+# Client setup backups may contain original credentials.
+*.mcpsentry-backup-*.json

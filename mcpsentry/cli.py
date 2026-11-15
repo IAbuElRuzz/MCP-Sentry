@@ -186,6 +186,21 @@ def parser():
     sub.add_argument("--state-dir", default=".mcpsentry")
     sub.add_argument("--session")
     sub.add_argument("--format", choices=("json", "text"), default="text")
+    sub = commands.add_parser("dashboard", help="Serve a private read-only audit dashboard on loopback")
+    sub.add_argument("--state-dir", default=".mcpsentry")
+    sub.add_argument("--port", type=int, default=8765)
+    sub = commands.add_parser("setup", help="Preview or apply Claude Desktop/Cursor configuration with backup")
+    sub.add_argument("--client", choices=("claude-desktop", "cursor"))
+    sub.add_argument("--config")
+    sub.add_argument("--target", help="Override the client JSON configuration path")
+    sub.add_argument("--state-dir", default=".mcpsentry")
+    sub.add_argument("--baseline")
+    sub.add_argument("--allow-exec", action="store_true")
+    sub.add_argument("--allow-network", action="store_true")
+    sub.add_argument("--remove-server", action="append", default=[], help="Explicitly remove a direct client entry that would bypass Sentry")
+    sub.add_argument("--apply", action="store_true", help="Apply the preview and save a private rollback backup")
+    sub.add_argument("--rollback", help="Restore a setup backup, only if the installed file is unchanged")
+    sub.add_argument("--interactive", action="store_true", help="Guide setup in a real terminal")
     sub = commands.add_parser("check", help="Inspect inline JSON arguments offline; prints categories only")
     sub.add_argument("--input", default="-", help="JSON argument file, or - for stdin")
     sub.add_argument("--tool", default="outbound__check", help="Tool alias for scoped DLP allow rules")
@@ -215,6 +230,40 @@ def main():
     args = parser().parse_args()
     audit = None
     try:
+        if args.command == "dashboard":
+            from .dashboard import run
+            if not 0 <= args.port <= 65535:
+                raise ValueError("Port must be between 0 and 65535")
+            run(args.state_dir, args.port)
+            return
+        if args.command == "setup":
+            from .setup import plan, apply, rollback
+            if args.rollback:
+                if args.apply or args.interactive or args.remove_server:
+                    raise ValueError("Rollback cannot be combined with setup changes")
+                print(json.dumps(rollback(args.rollback), indent=2, ensure_ascii=True))
+                return
+            if args.interactive:
+                if not sys.stdin.isatty():
+                    raise ValueError("Interactive setup requires a real terminal")
+                args.client = args.client or input("Client (claude-desktop/cursor): ").strip()
+                args.config = args.config or input("MCP-Sentry configuration file: ").strip()
+                if args.client not in {"claude-desktop", "cursor"}:
+                    raise ValueError("Choose claude-desktop or cursor")
+                config = load(args.config)
+                if any("url" not in spec for spec in config["servers"].values()) and not args.allow_exec:
+                    args.allow_exec = input("Reviewed local server commands? Authorize future launches (yes/no): ").strip() == "yes"
+                if any("url" in spec for spec in config["servers"].values()) and not args.allow_network:
+                    args.allow_network = input("Reviewed remote server URLs? Authorize future connections (yes/no): ").strip() == "yes"
+            if not args.client or not args.config:
+                raise ValueError("Pass --client and --config, or use --interactive")
+            prepared = plan(args.client, args.config, args.state_dir, args.target, args.allow_exec, args.allow_network, args.baseline, args.remove_server)
+            print(json.dumps(prepared[0], indent=2, ensure_ascii=True))
+            if args.interactive and not args.apply:
+                args.apply = input("Apply this plan and save a private backup? Type apply: ").strip() == "apply"
+            if args.apply:
+                print(json.dumps(apply(prepared), indent=2, ensure_ascii=True))
+            return
         if args.command == "policy-test":
             from .simulation import simulate
             config = load(args.config)

@@ -2,7 +2,9 @@
 
 A local security gateway for MCP tool traffic. See what your AI calls, apply policies before forwarding requests, and keep a metadata-only audit trail.
 
-**v0.6.0 · Experimental · Python 3.11+ · macOS / Linux · Standard-library core, optional PDF/SDK extras.** Inspect outbound MCP arguments, redact eligible sensitive content, and detect fragments spread across calls. Local stdio and remote Streamable HTTP upstreams share one client-facing stdio gateway.
+**v0.7.0 · Experimental · Python 3.11+ · macOS / Linux · Standard-library core, optional PDF/SDK extras.** Inspect outbound MCP arguments, redact eligible sensitive content, and detect fragments spread across calls. Local stdio and remote Streamable HTTP upstreams share one client-facing stdio gateway.
+
+See [dashboard and client setup](docs/DASHBOARD_SETUP.md) for a local security console and a preview-first Claude Desktop/Cursor setup wizard.
 
 See [advanced protection](docs/ADVANCED_PROTECTION.md) for tool-change reports, destination rules, response inspection and offline policy tests.
 
@@ -322,3 +324,12 @@ python -m mcpsentry policy-test --config examples/protection-policy.json --input
 ```
 
 See [Advanced protection](docs/ADVANCED_PROTECTION.md) for configuration and limits.
+
+### Local dashboard and client setup (0.7)
+
+```sh
+python3 -m mcpsentry dashboard --state-dir .mcpsentry
+python3 -m mcpsentry setup --interactive
+```
+
+The dashboard reads audit metadata without modifying the gateway. Client setup previews changes, preserves existing settings, and saves a private rollback backup when applied. [Guide](docs/DASHBOARD_SETUP.md).
