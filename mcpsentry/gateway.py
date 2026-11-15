@@ -8,6 +8,10 @@ from pathlib import Path
 
 from .security import Guard, encode, fingerprint, poisoned
 from .transport import Backend, BackendError, LIMIT, VERSIONS
+from .http_transport import HTTPBackend
+from . import __version__
+from .sandbox import protect_state
+from .approvals import Approvals
 
 
 class Gateway:
@@ -18,11 +22,17 @@ class Gateway:
         self.approved = None
         self.baseline = baseline
         self.routes = {}
+        self.approvals = Approvals(audit.path.parent) if config["policy"].get("approvals", {}).get("enabled", False) else None
 
     async def start(self):
         try:
             for name, spec in self.config["servers"].items():
-                backend = Backend(name, spec, self.config["timeout_seconds"])
+                if self.config["policy"].get("require_sandbox") and "url" not in spec and "sandbox" not in spec:
+                    raise ValueError("Local server sandbox is required")
+                if "sandbox" in spec:
+                    protect_state(spec["sandbox"], self.audit.path.parent)
+                backend_type = HTTPBackend if "url" in spec else Backend
+                backend = backend_type(name, spec, self.config["timeout_seconds"])
                 self.backends[name] = backend
                 await backend.start()
             tools = await self.discover()
@@ -53,6 +63,8 @@ class Gateway:
         if len(encode(tools).encode()) > LIMIT // 2:
             raise BackendError("aggregate_catalog_too_large")
         self.routes = routes
+        if self.guard.window is not None:
+            self.guard.window.destinations = {alias: backend.name for alias, (backend, _) in routes.items()}
         return tools
 
     def snapshot(self, tools):
@@ -92,16 +104,41 @@ class Gateway:
             self.audit.record("call_blocked", "", "block", "unknown_tool")
             return self.blocked("unknown_tool")
         p = self.config["policy"]
-        reason = self.guard.inspect_call(name, args)
+        redacted = 0
+        if self.mode == "enforce":
+            args, reasons, redacted = self.guard.prepare_call(name, args)
+        else:
+            reasons = self.guard.inspect_reasons(name, args)
+        from .security import matches
+        if self.approvals is not None and matches(name, p.get("approvals", {}).get("tools", [])):
+            reasons.append("operator_approval_required")
         if p.get("block_tool_changes", True) and self.changed(name, tools):
-            reason = "tool_changed"
+            reasons.insert(0, "tool_changed")
         if p.get("block_poisoning", True) and poisoned(tool):
-            reason = "tool_poisoning"
+            reasons.insert(0, "tool_poisoning")
+        reason = reasons[0] if reasons else None
         if reason and self.mode == "enforce":
-            self.audit.record("call_blocked", name, "block", reason)
-            return self.blocked(reason)
+            approved = False
+            settings = p.get("approvals", {})
+            patterns = settings.get("reasons", ["sensitive_data:*", "sensitive_data_transfer"])
+            # Every violation must be approvable. An approved recipient change
+            # cannot mask a separate secret or hard policy violation.
+            if self.approvals is not None and all(r != "sensitive_data:opaque_payload" and (r == "operator_approval_required" or matches(r, patterns)) for r in reasons):
+                status, identifier = self.approvals.claim_or_request(self.audit.session, name, fingerprint(self.config), fingerprint(tool), reasons, args, settings.get("ttl_seconds", 120))
+                approved = status == "consumed"
+                if not approved:
+                    self.audit.record("call_blocked", name, "block", "approval_" + status)
+                    return self.blocked("approval_" + status + ("; request_id=" + identifier if identifier else "") + ("; request_arguments_redacted=true" if redacted else ""))
+            if not approved:
+                self.audit.record("call_blocked", name, "block", reason)
+                return self.blocked(reason)
+            self.audit.record("approval_consumed", name, "allow", "exact_request_approved")
+            reason = None
         # Write intent before dispatch; audit failure prevents the operation.
+        if redacted:
+            self.audit.record("call_redacted", name, "allow", "sensitive_fields_removed")
         self.audit.record("call_started", name, "would_block" if reason else "allow", reason or "policy_passed")
+        self.guard.record_dispatch(name, args)
         backend, original = self.routes[name]
         try:
             result = await backend.request("tools/call", {"name": original, "arguments": args})
@@ -120,6 +157,9 @@ class Gateway:
             self.audit.record("call_finished", name, decision, "response_poisoning" if response_poison else "tool_error" if public.get("isError") else "completed", int((time.monotonic() - started) * 1000))
             if decision == "block":
                 return self.blocked("response_poisoning")
+            if redacted:
+                public["_meta"] = {"mcpsentry": {"redacted": True, "fields_changed": redacted}}
+                public["content"].append({"type": "text", "text": f"MCP-Sentry removed sensitive data from {redacted} configured field(s) before forwarding this call."})
             return public
         except BackendError:
             self.audit.record("call_failed", name, "error", "backend_failure", int((time.monotonic() - started) * 1000))
@@ -133,6 +173,15 @@ class Gateway:
         for backend in reversed(list(self.backends.values())):
             await backend.close()
         self.backends.clear()
+        self.guard.values.clear()
+        self.guard.last_inspection = None
+        if self.guard.window is not None:
+            self.guard.window.history.clear()
+            self.guard.window.destinations.clear()
+            self.guard.window.untracked_until = 0
+        if self.approvals is not None:
+            self.approvals.close()
+            self.approvals = None
 
 
 async def serve(gateway):
@@ -175,7 +224,7 @@ async def serve(gateway):
                 elif method == "initialize" and not initialized:
                     requested = params.get("protocolVersion")
                     version = requested if requested in VERSIONS else "2025-11-25"
-                    result = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "MCP-Sentry", "version": "0.1.0"}}
+                    result = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "MCP-Sentry", "version": __version__}}
                     initialized = True
                 elif not ready:
                     raise ValueError("Initialize the MCP session first")

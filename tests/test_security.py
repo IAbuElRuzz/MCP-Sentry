@@ -28,6 +28,12 @@ class SecurityTests(unittest.TestCase):
         guard = Guard({"default": "allow", "sensitive_destinations": ["*"]})
         self.assertEqual(guard.inspect_call("internal__report", {"body": "SENTRY_FAKE_SECRET_123456789"}), "secret_in_arguments")
 
+    def test_secret_and_sensitive_content_in_argument_keys(self):
+        guard = Guard({"default": "allow", "sensitive_sources": ["db__*"]})
+        self.assertEqual(guard.inspect_call("external__tool", {"nested": [{"SENTRY_FAKE_SECRET_123456789": "x"}]}), "secret_in_arguments")
+        guard.observe("db__read", {"text": "private-customer-reference-98765"})
+        self.assertEqual(guard.inspect_call("external__tool", {"private-customer-reference-98765": "x"}), "sensitive_data_transfer")
+
     def test_capacity_fails_closed(self):
         guard = Guard({"default": "allow", "sensitive_sources": ["*"]})
         guard.values = {str(n): "source" for n in range(2048)}

@@ -4,8 +4,12 @@ import asyncio
 import json
 import os
 import signal
+import uuid
+import tempfile
 
 from .security import encode
+from . import __version__
+from .sandbox import command as sandbox_command
 
 LIMIT = 1_048_576
 VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
@@ -22,13 +26,28 @@ class Backend:
         self.counter = 0
         self.lock = asyncio.Lock()
         self.broken = False
+        self.container_name = "mcpsentry-" + uuid.uuid4().hex if "sandbox" in spec else None
 
     async def start(self):
         # Explicit env only, plus minimal process/locale search environment.
         env = {k: v for k, v in os.environ.items() if k in {"PATH", "SYSTEMROOT", "LANG", "LC_ALL", "TMPDIR"}}
-        env.update(self.spec.get("env", {}))
-        self.process = await asyncio.create_subprocess_exec(self.spec["command"], *self.spec["args"], cwd=self.spec["cwd"], env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=LIMIT + 1, start_new_session=True)
-        result = await self.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "MCP-Sentry", "version": "0.1.0"}})
+        if not self.container_name:
+            env.update(self.spec.get("env", {}))
+        # An unlinked, inherited descriptor avoids both secret process argv and
+        # applying server environment variables to the host Docker CLI itself.
+        env_file = tempfile.TemporaryFile() if self.container_name and self.spec.get("env") else None
+        try:
+            if env_file:
+                env_file.write("".join(k + "=" + v + "\n" for k, v in self.spec["env"].items()).encode())
+                env_file.seek(0)
+            descriptor = "/dev/fd/" + str(env_file.fileno()) if env_file else None
+            argv = sandbox_command(self.spec, self.container_name, descriptor) if self.container_name else [self.spec["command"], *self.spec["args"]]
+            self.process = await asyncio.create_subprocess_exec(*argv, cwd=self.spec["cwd"], env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=LIMIT + 1, start_new_session=True, pass_fds=(env_file.fileno(),) if env_file else ())
+            # Keep the descriptor alive until Docker has read the env-file.
+            result = await self.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "MCP-Sentry", "version": __version__}})
+        finally:
+            if env_file:
+                env_file.close()
         if result.get("protocolVersion") not in VERSIONS:
             raise BackendError("unsupported_backend_protocol")
         await self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -92,6 +111,21 @@ class Backend:
         raise BackendError("too_many_pages")
 
     async def close(self):
+        try:
+            await self._close_process()
+        finally:
+            if self.container_name:
+                try:
+                    cleanup = await asyncio.create_subprocess_exec("docker", "--context", "default", "rm", "--force", self.container_name, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    try:
+                        await asyncio.wait_for(cleanup.wait(), 3)
+                    except TimeoutError:
+                        cleanup.kill()
+                        await cleanup.wait()
+                except OSError:
+                    pass
+
+    async def _close_process(self):
         if self.process is None:
             return
         if self.process.stdin:

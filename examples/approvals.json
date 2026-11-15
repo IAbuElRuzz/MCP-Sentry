@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "mail": {
+      "command": "python3",
+      "args": ["-m", "mcpsentry.demo_server", "mail"],
+      "cwd": ".."
+    }
+  },
+  "policy": {
+    "default": "deny",
+    "allow": ["mail__send"],
+    "recipient_allowlists": {"mail__send": {"to": ["team@example.com"]}},
+    "approvals": {"enabled": true, "tools": ["mail__send"], "ttl_seconds": 120, "reasons": ["sensitive_data:*", "sensitive_data_transfer"]}
+  }
+}

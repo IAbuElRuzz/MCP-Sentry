@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "mail": {"command": "python3", "args": ["-m", "mcpsentry.demo_server", "mail"], "cwd": ".."}
+  },
+  "policy": {
+    "default": "deny",
+    "allow": ["mail__send"],
+    "recipient_allowlists": {"mail__send": {"to": ["team@example.com"]}},
+    "redaction": {
+      "enabled": true,
+      "rules": [{
+        "tool": "mail__send",
+        "paths": ["/body"],
+        "categories": ["email", "phone", "payment_card", "iban", "national_id", "credentials", "private_key", "sensitive_field", "custom", "confidential_text", "health_information", "personal_information", "tracked_data"]
+      }]
+    },
+    "cross_call": {"enabled": true, "window_seconds": 120, "max_calls": 16, "scope": "session"}
+  }
+}

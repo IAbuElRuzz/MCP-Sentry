@@ -1,0 +1,7 @@
+**
+!mcpsentry/
+mcpsentry/*
+!mcpsentry/demo_server.py
+!examples/
+examples/*
+!examples/Dockerfile.demo

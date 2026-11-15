@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "db": {
+      "command": "python3",
+      "args": ["/workspace/demo_server.py", "database"],
+      "sandbox": {"image": "mcpsentry-demo:local"}
+    }
+  },
+  "policy": {
+    "default": "deny",
+    "allow": ["db__read_customer"],
+    "require_sandbox": true,
+    "sensitive_sources": ["db__*"]
+  }
+}

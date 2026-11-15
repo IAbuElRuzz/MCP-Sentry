@@ -1,0 +1,5 @@
+FROM python:3.12-alpine
+WORKDIR /workspace
+COPY mcpsentry/demo_server.py /workspace/demo_server.py
+USER 65534:65534
+ENTRYPOINT ["python3", "/workspace/demo_server.py"]
