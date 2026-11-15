@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-sentry"
-version = "0.6.0"
+version = "0.7.0"
 description = "An MCP security gateway with outbound sensitive-data inspection, policies, and redacted audit events"
 requires-python = ">=3.11"
 dependencies = []
@@ -20,3 +20,6 @@ mcpsentry = "mcpsentry.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mcpsentry*"]
+
+[tool.setuptools.package-data]
+mcpsentry = ["web/*.html", "web/*.css", "web/*.js"]

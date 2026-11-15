@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Add a token-protected loopback dashboard with read-only audit access, session/decision filters, timeline search, live refresh and metadata export.
+- Add interactive and preview-first Claude Desktop/Cursor setup, absolute launch paths, explicit direct-entry removal, private backups and change-aware rollback.
+- Package dashboard assets and desktop launcher with the Python distribution.
+
+
 ## 0.6.0
 
 - Hash-only tool metadata component baselines and field-level change reports, including annotations.
